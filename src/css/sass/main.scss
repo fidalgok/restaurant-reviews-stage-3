@@ -74,11 +74,11 @@ video {
     grid-template-rows: auto auto;
   }
 
-  #map-container {
+  .inside #map-container {
     grid-column: 2;
   }
 
-  #restaurant-container {
+  .inside #restaurant-container {
     grid-row: 1;
     grid-column: 1;
   }
@@ -357,6 +357,7 @@ nav h1 a {
 
 //review form
 .form {
+  padding: 3rem 0;
   margin-bottom: 1.5rem;
   &__title {
     text-align: center;

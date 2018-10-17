@@ -168,7 +168,10 @@ function fillRestaurantHoursHTML(operatingHours = restaurant.operating_hours) {
  * Create all reviews HTML and add them to the webpage.
  */
 async function fillReviewsHTML(id = restaurant.id) {
-  const reviews = await DBHelper.getRestaurantReviews(id);
+  let reviews = await DBHelper.getRestaurantReviews(id).catch(err => {
+    console.log(err);
+    reviews = '';
+  });
   const container = document.getElementById('reviews-container');
   const title = document.createElement('h3');
   title.innerHTML = 'Reviews';
