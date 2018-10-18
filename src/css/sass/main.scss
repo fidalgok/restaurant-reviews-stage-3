@@ -467,3 +467,78 @@ and remove the margin because we have grid gaps. */
     margin: 0;
   }
 }
+
+//Toast messages
+
+.toast {
+  position: fixed;
+  left: 0;
+  bottom: 0;
+  padding: 20px;
+  background: #444;
+  color: white;
+  width: 35%;
+
+  &__content {
+    font-size: 1.8rem;
+    padding: 1rem 0;
+  }
+
+  &__button {
+    font-size: inherit;
+    letter-spacing: 0.9px;
+    font-weight: 600;
+    text-transform: uppercase;
+    background: none;
+    border: none;
+    border-bottom: 3px solid #ffc600;
+    color: inherit;
+    padding: 1.2rem 1.6rem;
+    transition: background 0.12s;
+    &:not(:last-of-type) {
+      margin-right: 2rem;
+    }
+    &:hover {
+      cursor: pointer;
+    }
+    &:hover,
+    &:focus {
+      background: #ffc600;
+      color: #333;
+    }
+  }
+}
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+  }
+
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes fadeOut {
+  from {
+    opacity: 1;
+  }
+
+  to {
+    opacity: 0;
+  }
+}
+
+.fadeIn {
+  animation-name: fadeIn;
+  animation-duration: 1s;
+}
+
+.fadeOut {
+  animation: fadeOut 1s;
+}
+
+@media screen and (max-width: 768px) {
+  .toast {
+    width: 100%;
+  }
+}

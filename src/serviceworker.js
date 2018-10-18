@@ -1,5 +1,5 @@
 //console.log('from service worker: successfully registered');
-const cacheVersion = 'restaurant-reviews-v1-';
+const cacheVersion = 'restaurant-reviews-v2-';
 const restaurantImagesCache = 'restaurant-images';
 const restaurantIconsCache = 'restaurant-icons';
 const urlsToCache = [

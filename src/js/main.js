@@ -1,4 +1,5 @@
 import DBHelper from './dbhelper';
+import Toast from './toast';
 
 let restaurants, neighborhoods, cuisines, updatedRestaurants;
 var initMap, newMap;
@@ -277,6 +278,7 @@ const registerServiceWorker = () => {
           if (workerWaiting) {
             console.log("there's a waiting worker");
             //TODO let someone know a worker is waiting
+            updateReady(workerWaiting);
           }
 
           if (workerInstalling) {
@@ -299,7 +301,7 @@ const registerServiceWorker = () => {
             function() {
               //fires when the service worker controlling the page changes
               //TODO uncomment this after testing
-              // window.location.reload();
+              window.location.reload();
             }
           );
         })
@@ -329,9 +331,15 @@ function trackInstalling(installingWorker) {
 function updateReady(worker) {
   console.log('sending message to refresh', worker);
   //TODO uncomment this after testing
-  // if (window.confirm('update?')) {
-  //   worker.postMessage({ refresh: true });
-  // }
+
+  const confirm = showToast(
+    document.querySelector('body'),
+    `Hey, there's some fresh improvements coming your way. Hit refresh to spruce things up!`,
+    { buttons: ['Dismiss', 'refresh'] }
+  );
+  confirm.then(() => worker.postMessage({ refresh: true })).catch(err => {
+    //do nothing
+  });
 }
 
 /**
@@ -339,7 +347,39 @@ function updateReady(worker) {
  */
 document.addEventListener('DOMContentLoaded', event => {
   initMap();
+  window.addEventListener('offline', function(e) {
+    console.log('offline');
 
+    showToast(
+      document.querySelector('body'),
+      `Oh No! You're offline! That's ok this website works offline, keep browsing without a worry. Anything you do including filling out reviews will be saved once you're back online🎉🎉🎉!`,
+      { buttons: ['Dismiss'] }
+    ).catch(() => {
+      //do nothing, catching a promise so we can update the service worker
+    });
+  });
   //TODO: turn on after testing
-  //registerServiceWorker();
+  registerServiceWorker();
 });
+
+function showToast(container, message, options) {
+  const toast = new Toast(container, message, options);
+  toast.appendToContainer();
+  const buttons = toast.getButtons;
+  return new Promise((resolve, reject) => {
+    buttons.forEach(button =>
+      button.addEventListener('click', e => {
+        console.log(e.target.textContent);
+        toast.toast.classList.remove('fadeIn');
+        toast.toast.classList.add('fadeOut');
+        setTimeout(() => {
+          toast.container.removeChild(toast.toast);
+        }, 900);
+        if (e.target.textContent.toLowerCase() === 'refresh') {
+          resolve(true);
+        }
+        reject(false);
+      })
+    );
+  });
+}

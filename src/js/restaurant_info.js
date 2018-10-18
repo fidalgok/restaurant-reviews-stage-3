@@ -1,5 +1,5 @@
-// import DBHelper from './dbhelper';
 import DBHelper from './dbhelper.js';
+import Toast from './toast';
 //helper library to sanitize form submits, learned how to use it in the Learn Node wes bos course. I figured adding a bit of security to the application wouldn't hurt
 import dompurify from 'dompurify';
 
@@ -317,6 +317,7 @@ const registerServiceWorker = () => {
           if (workerWaiting) {
             console.log("there's a waiting worker");
             //TODO let someone know a worker is waiting
+            updateReady(workerWaiting);
           }
 
           if (workerInstalling) {
@@ -338,7 +339,8 @@ const registerServiceWorker = () => {
             'controllerchange',
             function() {
               //fires when the service worker controlling the page changes
-              // window.location.reload();
+              //TODO uncomment this after testing
+              window.location.reload();
             }
           );
         })
@@ -354,5 +356,63 @@ const registerServiceWorker = () => {
   }
 };
 
-initApp();
-//registerServiceWorker();
+function trackInstalling(installingWorker) {
+  installingWorker.addEventListener('statechange', () => {
+    //state changed see if it installed
+    if (installingWorker.state === 'installed') {
+      console.log('update ready');
+      //todo call update function
+      updateReady(installingWorker);
+    }
+  });
+}
+
+function updateReady(worker) {
+  console.log('sending message to refresh', worker);
+  //TODO uncomment this after testing
+
+  const confirm = showToast(
+    document.querySelector('body'),
+    `Hey, there's some fresh improvements coming your way. Hit refresh to spruce things up!`,
+    { buttons: ['Dismiss', 'refresh'] }
+  );
+  confirm.then(() => worker.postMessage({ refresh: true })).catch(err => {
+    //do nothing
+  });
+}
+
+document.addEventListener('DOMContentLoaded', event => {
+  initApp();
+  window.addEventListener('offline', function(e) {
+    console.log('offline');
+
+    showToast(
+      document.querySelector('body'),
+      `Oh No! You're offline! That's ok this website works offline, keep browsing without a worry. Anything you do including filling out reviews will be saved once you're back online🎉🎉🎉!`,
+      { buttons: ['Dismiss'] }
+    ).catch(() => '');
+  });
+  //TODO: turn on after testing
+  registerServiceWorker();
+});
+function showToast(container, message, options) {
+  const toast = new Toast(container, message, options);
+  toast.appendToContainer();
+  const buttons = toast.getButtons;
+  return new Promise((resolve, reject) => {
+    buttons.forEach(button =>
+      button.addEventListener('click', e => {
+        console.log(e.target.textContent);
+        toast.toast.classList.remove('fadeIn');
+        toast.toast.classList.add('fadeOut');
+        setTimeout(() => {
+          toast.container.removeChild(toast.toast);
+        }, 900);
+        if (e.target.textContent.toLowerCase() === 'refresh') {
+          resolve(true);
+        }
+        reject(false);
+      })
+    );
+  });
+}
