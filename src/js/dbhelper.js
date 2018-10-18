@@ -10,12 +10,20 @@ function openDatabase() {
 
   //otherwise return the dbPromise
 
-  return idb.open('restaurant', 1, upgradeDb => {
+  return idb.open('restaurant', 3, upgradeDb => {
     switch (upgradeDb.oldVersion) {
       case 0:
         upgradeDb.createObjectStore('restaurants', {
           keyPath: 'id',
         });
+      //todo: create reviews objectStore
+      case 1:
+        let reviewStore = upgradeDb.createObjectStore('reviews', {
+          keyPath: 'id',
+        });
+        reviewStore.createIndex('restaurant_id', 'restaurant_id');
+      case 2:
+        upgradeDb.createObjectStore('offline-reviews', { autoIncrement: true });
     }
   });
 }
@@ -55,6 +63,49 @@ function serveRestaurantsFromCache(callback) {
     );
 }
 
+//serve reviews from cache
+async function serveReviewsFromCache(restaurantId) {
+  //getting all reviews for a given restaurant
+  const db = await _dbPromise;
+  const tx = db.transaction('reviews');
+  const reviewStore = tx.objectStore('reviews');
+  const restaurantIndex = reviewStore.index('restaurant_id');
+  const restaurantReviews = await restaurantIndex
+    .getAll(restaurantId)
+    .catch(err =>
+      console.log('Messed up getting indexed restaurant reviews: ', err)
+    );
+  //check for any offline reviews and add while offline
+  if (!navigator.onLine) {
+    const offlineReviews = await checkOfflineReviews();
+    const mergedReviews = restaurantReviews.concat(offlineReviews);
+    return mergedReviews;
+  }
+  return restaurantReviews;
+}
+
+//look for offline reviews
+async function checkOfflineReviews() {
+  const db = await _dbPromise;
+  const tx = db.transaction('offline-reviews');
+  const offlineStore = tx.objectStore('offline-reviews');
+  const reviews = await offlineStore.getAll();
+  return reviews;
+}
+
+async function deleteOfflineReviews() {
+  const db = await _dbPromise;
+  const tx = db.transaction('offline-reviews', 'readwrite');
+  const offlinStore = tx.objectStore('offline-reviews');
+
+  const cursor = offlinStore.openCursor();
+  return cursor.then(function deleteItems(cursor) {
+    if (!cursor) return;
+    cursor.delete();
+    return cursor.continue().then(deleteItems);
+  });
+}
+
 /**
  * Common database helper functions.
  */
@@ -77,6 +128,25 @@ class DBHelper {
     try {
       const db = await _dbPromise;
       const cachedRestaurants = await serveRestaurantsFromCache(callback);
+
+      //check if any reviews came in while offline,
+
+      const offlineCachedReviews = await checkOfflineReviews();
+
+      //if online and user navigated away from restaurant page while reviews were sent offline, delete them from the main page as well.
+      if (navigator.onLine) {
+        if (offlineCachedReviews.length) {
+          //found offline reviews, send them off
+          //to the create function
+          await Promise.all(
+            offlineCachedReviews.map(review => {
+              return this.createReview(review);
+            })
+          );
+          //if successful, delete the offline que
+          await deleteOfflineReviews();
+        }
+      }
 
       if (cachedRestaurants && cachedRestaurants.length === 0) {
         // didn't receive restaurants from cache, send them via fetch,
@@ -118,14 +188,96 @@ class DBHelper {
   //grab all the restaurant reviews, update idb, return all reviews
   static async getRestaurantReviews(restaurantId) {
     try {
-      const res = await fetch(
-        `${this.DATABASE_URL}/reviews/?restaurant_id=${restaurantId}`
-      );
-      const reviews = await res.json();
-      return Promise.resolve(reviews);
+      //look at cache first, if reviews don't come back
+      //go to network and update db
+
+      const cachedReviews = await serveReviewsFromCache(restaurantId);
+      //check if any reviews came in while offline,
+
+      const offlineCachedReviews = await checkOfflineReviews();
+
+      //if online grab reviews from network if possible
+      if (navigator.onLine) {
+        if (offlineCachedReviews.length) {
+          //found offline reviews, send them off
+          //to the create function
+          await Promise.all(
+            offlineCachedReviews.map(review => {
+              return this.createReview(review);
+            })
+          );
+          //if successful, delete the offline que
+          await deleteOfflineReviews();
+        }
+        var res = await fetch(
+          `${this.DATABASE_URL}/reviews/?restaurant_id=${restaurantId}`
+        );
+        var reviews = await res.json();
+      }
+
+      if (cachedReviews && cachedReviews.length === 0) {
+        //no reviews returned, return reviews received from network, update cache if there's a difference in
+        //add returned reviews to cache from network
+        this.updateReviewCache(reviews, 'reviews')
+          .then(() => console.log('putting reviews transaction completed'))
+          .catch(err =>
+            console.log(
+              'something went wrong updating cachedReviews from network ',
+              err
+            )
+          );
+        return Promise.resolve(reviews);
+      } else {
+        //return cached reviews, and update cached reviews with response from network if we're online
+        if (reviews) {
+          const newReviews = reviews.filter(
+            review => !cachedReviews.find(creview => creview.id === review.id)
+          );
+          if (newReviews.length) {
+            this.updateReviewCache(newReviews, 'reviews')
+              .then(() =>
+                console.log(
+                  'successfullly updated cache with new reviews since creating db'
+                )
+              )
+              .catch(err =>
+                console.log(
+                  "reviews were in cache, but we couldn't update with new reviews ",
+                  err
+                )
+              );
+          }
+        }
+        return Promise.resolve(cachedReviews);
+      }
     } catch (err) {
       return Promise.reject(err);
     }
+  }
+  //put any reviews
+  static async updateReviewCache(reviews, cacheName) {
+    //add reviews to indexedDb
+    const db = await _dbPromise;
+    let tx = db.transaction(cacheName, 'readwrite');
+    let reviewStore = tx.objectStore(cacheName);
+    await Promise.all(
+      reviews.map(review => {
+        //put all reviews in cache
+
+        return reviewStore.put(review);
+      })
+    ).catch(err => {
+      console.log('error putting reviews in cachedreviewpromise: ', err);
+      tx.abort();
+      return Promise.reject(err);
+    });
+
+    return tx.complete;
+  }
+
+  static async addReviewsToServer(reviews) {
+    //add any reviews received offline to server
+    return reviews;
   }
 
   /**
@@ -281,6 +433,29 @@ class DBHelper {
     );
     marker.addTo(map);
     return marker;
+  }
+
+  /**
+   * Post request to reviews
+   */
+  static async createReview(body) {
+    //todo: update idb with reviews
+    try {
+      const res = await fetch(`${DBHelper.DATABASE_URL}/reviews`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+
+      if (res.ok) {
+        const review = await res.json();
+        this.updateReviewCache([review], 'reviews');
+        return Promise.resolve(review);
+      }
+    } catch (err) {
+      //offline, update cache, send back review with message saying user is offline
+      this.updateReviewCache([body], 'offline-reviews');
+      return Promise.reject({ err, body });
+    }
   }
 }
 

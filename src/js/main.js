@@ -1,6 +1,6 @@
 import DBHelper from './dbhelper';
 
-let restaurants, neighborhoods, cuisines;
+let restaurants, neighborhoods, cuisines, updatedRestaurants;
 var initMap, newMap;
 var markers = [];
 
@@ -8,15 +8,11 @@ var markers = [];
  * Fetch all neighborhoods and set their HTML.
  */
 function fetchNeighborhoods() {
-  DBHelper.fetchNeighborhoods((error, foundNeighborhoods) => {
-    if (error) {
-      // Got an error
-      console.log('error getting neighborhoods', error);
-    } else {
-      neighborhoods = foundNeighborhoods;
-      fillNeighborhoodsHTML(neighborhoods);
-    }
-  });
+  //refactor to only fetch restaurants once, and update html appropriately.
+  // Remove duplicates from cuisines
+  const uniqueNeighborhoods = new Set(restaurants.map(res => res.neighborhood));
+  neighborhoods = [...uniqueNeighborhoods];
+  fillNeighborhoodsHTML(neighborhoods);
 }
 
 /**
@@ -38,14 +34,11 @@ function fillNeighborhoodsHTML(neighborhoods) {
  * Fetch all cuisines and set their HTML.
  */
 function fetchCuisines() {
-  DBHelper.fetchCuisines((error, cuisines) => {
-    if (error) {
-      // Got an error!
-      console.error('error getting cuisines', error);
-    } else {
-      fillCuisinesHTML(cuisines);
-    }
-  });
+  //refactor to only fetch restaurants once, and update html appropriately.
+  // Remove duplicates from cuisines
+  const uniqueCuisines = new Set(restaurants.map(res => res.cuisine_type));
+  cuisines = [...uniqueCuisines];
+  fillCuisinesHTML(cuisines);
 }
 
 /**
@@ -117,7 +110,9 @@ function updateRestaurants() {
         );
       } else {
         resetRestaurants(filteredRestaurants);
-        fillRestaurantsHTML(restaurants);
+        fillRestaurantsHTML(updatedRestaurants);
+        fetchNeighborhoods();
+        fetchCuisines();
       }
     }
   );
@@ -129,7 +124,7 @@ function updateRestaurants() {
 function resetRestaurants(filteredRestaurants) {
   // Remove all restaurants
 
-  restaurants = [];
+  updatedRestaurants = [];
   const ul = document.getElementById('restaurants-list');
   ul.innerHTML = '';
 
@@ -139,6 +134,8 @@ function resetRestaurants(filteredRestaurants) {
   }
   markers = [];
 
+  updatedRestaurants = filteredRestaurants;
+  if (restaurants) return;
   restaurants = filteredRestaurants;
 }
 
@@ -264,11 +261,46 @@ const registerServiceWorker = () => {
       navigator.serviceWorker
         .register('../serviceworker.js')
         .then(registration => {
+          let {
+            waiting: workerWaiting,
+            active: workerActive,
+            installing: workerInstalling,
+          } = registration;
+
           //success
           console.log(
             `Successfully registered service worker with scope: ${
               registration.scope
             }`
+          );
+          //if there's a worker waiting let's update the user
+          if (workerWaiting) {
+            console.log("there's a waiting worker");
+            //TODO let someone know a worker is waiting
+          }
+
+          if (workerInstalling) {
+            console.log('theres a worker installing');
+            //todo: track installing worker
+            trackInstalling(workerInstalling);
+          }
+
+          registration.addEventListener('updatefound', () => {
+            workerInstalling = registration.installing;
+            console.log('update found');
+            console.log(workerInstalling.state);
+            //todo track installing worker
+            trackInstalling(workerInstalling);
+          });
+
+          //if the active service worker changes fire a window reload
+          navigator.serviceWorker.addEventListener(
+            'controllerchange',
+            function() {
+              //fires when the service worker controlling the page changes
+              //TODO uncomment this after testing
+              // window.location.reload();
+            }
           );
         })
         .catch(err => {
@@ -283,13 +315,31 @@ const registerServiceWorker = () => {
   }
 };
 
+function trackInstalling(installingWorker) {
+  installingWorker.addEventListener('statechange', () => {
+    //state changed see if it installed
+    if (installingWorker.state === 'installed') {
+      console.log('update ready');
+      //todo call update function
+      updateReady(installingWorker);
+    }
+  });
+}
+
+function updateReady(worker) {
+  console.log('sending message to refresh', worker);
+  //TODO uncomment this after testing
+  // if (window.confirm('update?')) {
+  //   worker.postMessage({ refresh: true });
+  // }
+}
+
 /**
  * Fetch neighborhoods and cuisines as soon as the page is loaded.
  */
 document.addEventListener('DOMContentLoaded', event => {
   initMap();
-  fetchNeighborhoods();
-  fetchCuisines();
+
   //TODO: turn on after testing
-  // registerServiceWorker();
+  //registerServiceWorker();
 });

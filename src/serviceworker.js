@@ -1,5 +1,5 @@
 //console.log('from service worker: successfully registered');
-const cacheVersion = 'restaurant-reviews-v2-';
+const cacheVersion = 'restaurant-reviews-v1-';
 const restaurantImagesCache = 'restaurant-images';
 const restaurantIconsCache = 'restaurant-icons';
 const urlsToCache = [
@@ -53,7 +53,7 @@ self.addEventListener('fetch', event => {
       return;
     }
     if (requestUrl.pathname.startsWith('/restaurant.html')) {
-      event.respondWith(
+      return event.respondWith(
         caches.match('/restaurant.html').then(response => {
           if (response) return response;
           return fetch(event.request).then(response => response);
@@ -104,6 +104,12 @@ self.addEventListener('activate', event => {
       );
     })
   );
+});
+
+self.addEventListener('message', e => {
+  if (e.data.refresh === true) {
+    self.skipWaiting();
+  }
 });
 
 function serveImages(request) {

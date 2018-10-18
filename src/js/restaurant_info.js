@@ -1,13 +1,15 @@
 // import DBHelper from './dbhelper';
 import DBHelper from './dbhelper.js';
+//helper library to sanitize form submits, learned how to use it in the Learn Node wes bos course. I figured adding a bit of security to the application wouldn't hurt
+import dompurify from 'dompurify';
 
 let restaurant;
-var map;
+const reviewForm = document.querySelector('.form');
 
 /**
  * Initialize Google map, called from HTML.
  */
-const initMap = () => {
+const initApp = () => {
   fetchRestaurantFromURL((error, restaurant) => {
     if (error) {
       // Got an error!
@@ -31,8 +33,11 @@ const initMap = () => {
           id: 'mapbox.streets',
         }
       ).addTo(self.map);
+      fillRestaurantHTML(restaurant);
       fillBreadcrumb(restaurant);
       DBHelper.mapMarkerForRestaurant(restaurant, self.map);
+      let submitReview = passRestaurant({ restaurant_id: restaurant.id });
+      reviewForm.addEventListener('submit', submitReview);
     }
   });
 };
@@ -59,7 +64,6 @@ function fetchRestaurantFromURL(callback) {
       }
       restaurant = foundRestaurant;
 
-      fillRestaurantHTML(restaurant);
       callback(null, restaurant);
     });
   }
@@ -184,7 +188,9 @@ async function fillReviewsHTML(id = restaurant.id) {
     return;
   }
   const ul = document.getElementById('reviews-list');
+  //show latest reviews first, then create DOM elements for each review
   const reviewHTML = reviews
+    .reverse()
     .map(review => {
       return createReviewHTML(review);
     })
@@ -208,7 +214,11 @@ function createReviewHTML({
   <li id="review-${id}" data-id='${id}' data-restaurant-id='${restaurant_id}'>
   <div class="review__header review--black">
     <p>${name}</p>
-    <p>${new Date(updatedAt).toLocaleDateString()}</p>
+    <p>${
+      updatedAt
+        ? new Date(updatedAt).toLocaleDateString()
+        : new Date().toLocaleDateString()
+    }</p>
   </div>
   <p class="review--orange review__rating">
     Rating: ${rating}
@@ -246,4 +256,103 @@ function getParameterByName(name, url) {
   return decodeURIComponent(results[2].replace(/\+/g, ' '));
 }
 
-initMap();
+function passRestaurant(restaurant) {
+  //passing the restaurant to the evenlistener function
+  //will probably refactor later
+  return async function handleSubmit(e) {
+    e.preventDefault();
+    //grab form inputs from this
+    const { name, comment, rating } = this;
+
+    //form fields are required except the comment field
+    //just validate here they aren't blank before sending the form to the db
+
+    const cleanName = dompurify.sanitize(name.value);
+    const cleanComment = dompurify.sanitize(comment.value);
+
+    const review = await DBHelper.createReview({
+      name: cleanName,
+      rating: rating.value,
+      comments: cleanComment,
+      restaurant_id: restaurant.restaurant_id,
+    }).catch(res => {
+      console.log(
+        'youre offline, but reviews will be sent after your connection is restored'
+      );
+      return res.body;
+    });
+    //todo: update reviews with new review
+    //clear form
+
+    this.reset();
+    const ul = document.getElementById('reviews-list');
+    const reviewHTML = createReviewHTML(review);
+    ul.insertAdjacentHTML('afterbegin', reviewHTML);
+    console.log(`ive been submitted`, review);
+  };
+}
+
+/**
+ * Register Service Worker
+ */
+const registerServiceWorker = () => {
+  if ('navigator' in window) {
+    self.addEventListener('load', () => {
+      navigator.serviceWorker
+        .register('../serviceworker.js')
+        .then(registration => {
+          let {
+            waiting: workerWaiting,
+            active: workerActive,
+            installing: workerInstalling,
+          } = registration;
+
+          //success
+          console.log(
+            `Successfully registered service worker with scope: ${
+              registration.scope
+            }`
+          );
+          //if there's a worker waiting let's update the user
+          if (workerWaiting) {
+            console.log("there's a waiting worker");
+            //TODO let someone know a worker is waiting
+          }
+
+          if (workerInstalling) {
+            console.log('theres a worker installing');
+            //todo: track installing worker
+            trackInstalling(workerInstalling);
+          }
+
+          registration.addEventListener('updatefound', () => {
+            workerInstalling = registration.installing;
+            console.log('update found');
+            console.log(workerInstalling.state);
+            //todo track installing worker
+            trackInstalling(workerInstalling);
+          });
+
+          //if the active service worker changes fire a window reload
+          navigator.serviceWorker.addEventListener(
+            'controllerchange',
+            function() {
+              //fires when the service worker controlling the page changes
+              // window.location.reload();
+            }
+          );
+        })
+        .catch(err => {
+          //something went wrong
+          console.log(`Service worker registration failed with: ${err}`);
+        });
+    });
+  } else {
+    /**
+     * Service workers aren't supported, do nothing
+     */
+  }
+};
+
+initApp();
+//registerServiceWorker();
