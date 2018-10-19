@@ -393,7 +393,7 @@ document.addEventListener('DOMContentLoaded', event => {
     ).catch(() => '');
   });
   //TODO: turn on after testing
-  registerServiceWorker();
+  //registerServiceWorker();
 });
 function showToast(container, message, options) {
   const toast = new Toast(container, message, options);

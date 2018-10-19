@@ -1,5 +1,6 @@
 import DBHelper from './dbhelper';
 import Toast from './toast';
+import icons from './icons';
 
 let restaurants, neighborhoods, cuisines, updatedRestaurants;
 var initMap, newMap;
@@ -150,13 +151,26 @@ function fillRestaurantsHTML(restaurants) {
     ul.append(createRestaurantHTML(restaurant));
   });
   navigator.onLine ? addMarkersToMap(restaurants, newMap) : null;
+  //grab all heart forms and add event listener to update
+  //restaurants
+  const hearts = [...document.querySelectorAll('.heart')];
+  hearts.forEach(heart =>
+    heart.addEventListener('submit', DBHelper.updateFavoriteRestaurant)
+  );
 }
 
 /**
  * Create restaurant HTML.
  */
 function createRestaurantHTML(restaurant) {
+  let isFavorite;
   const li = document.createElement('li');
+  //fallback in case it doesn't exist from database at first
+  if (typeof restaurant.is_favorite === 'string') {
+    isFavorite = restaurant.is_favorite === 'false' ? false : true;
+  } else {
+    isFavorite = restaurant.is_favorite || false;
+  }
 
   const picture = createResponsiveImageHtml(
     DBHelper.imageUrlForRestaurant(restaurant),
@@ -165,9 +179,23 @@ function createRestaurantHTML(restaurant) {
   li.append(picture);
   const detailsContainer = document.createElement('div');
   detailsContainer.classList.add('restaurants-list--details');
+  const header = document.createElement('div');
+  header.classList.add('restaurant-list__heading');
   const name = document.createElement('h2');
   name.innerHTML = restaurant.name;
-  detailsContainer.append(name);
+  const heartClass = isFavorite ? 'heart__button--hearted' : '';
+  const heart = `
+    <form action="http://localhost:1337/restaurants/${
+      restaurant.id
+    }/?is_favorite=${!isFavorite}" method="POST" class="heart" data-heart="${!isFavorite}">
+      <button type='Submit' name='heart' aria-label="${
+        isFavorite ? 'Remove from Favorites' : 'Add to Favorites'
+      }"  class="heart__button ${heartClass}">${icons.heart}</button>
+    </form>
+  `;
+  header.append(name);
+  header.insertAdjacentHTML('beforeend', heart);
+  detailsContainer.append(header);
 
   const neighborhood = document.createElement('p');
   neighborhood.innerHTML = restaurant.neighborhood;

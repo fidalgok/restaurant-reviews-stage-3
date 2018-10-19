@@ -10,7 +10,7 @@ function openDatabase() {
 
   //otherwise return the dbPromise
 
-  return idb.open('restaurant', 3, upgradeDb => {
+  return idb.open('restaurant', 4, upgradeDb => {
     switch (upgradeDb.oldVersion) {
       case 0:
         upgradeDb.createObjectStore('restaurants', {
@@ -24,6 +24,10 @@ function openDatabase() {
         reviewStore.createIndex('restaurant_id', 'restaurant_id');
       case 2:
         upgradeDb.createObjectStore('offline-reviews', { autoIncrement: true });
+      case 3:
+        upgradeDb.createObjectStore('offline-restaurant-favorite', {
+          keyPath: 'id',
+        });
     }
   });
 }
@@ -50,9 +54,28 @@ function serveRestaurantsFromCache(callback) {
     })
     .then(
       restaurants => {
-        // callback(null, restaurants);
+        //check for any offline updates to favorited restaurants and add while offline
+        if (!navigator.onLine) {
+          //TODO check this code
+          return checkOfflineRestaurantFavorites().then(offlineRestaurants => {
+            const mergedRestaurants = restaurants.map(restaurant => {
+              //check if there is an offline restaurant entry with the same id as one already
+              //in the cache
 
-        return restaurants;
+              const offlineRestaurant = offlineRestaurants.find(
+                orestaurant => orestaurant.id === restaurant.id
+              );
+              if (offlineRestaurant) {
+                restaurant.is_favorite = offlineRestaurant.is_favorite;
+                return restaurant;
+              }
+              return restaurant;
+            });
+            return mergedRestaurants;
+          });
+        } else {
+          return restaurants;
+        }
       }, //something went wrong
       () =>
         //send the error back in the callback
@@ -61,6 +84,30 @@ function serveRestaurantsFromCache(callback) {
           null
         )
     );
+}
+
+//check for anyone marking restaurants as favorite while offline
+//could probably refactor to work with offline review object store
+//but it works for now
+async function checkOfflineRestaurantFavorites() {
+  const db = await _dbPromise;
+  const tx = db.transaction('offline-restaurant-favorite');
+  const offlineStore = tx.objectStore('offline-restaurant-favorite');
+  const restaurantUpdates = await offlineStore.getAll();
+  return restaurantUpdates;
+}
+
+async function deleteOfflineRestaurantFavorites() {
+  const db = await _dbPromise;
+  const tx = db.transaction('offline-restaurant-favorite', 'readwrite');
+  const offlineStore = tx.objectStore('offline-restaurant-favorite');
+
+  const cursor = offlineStore.openCursor();
+  return cursor.then(function deleteItems(cursor) {
+    if (!cursor) return;
+    cursor.delete();
+    return cursor.continue().then(deleteItems);
+  });
 }
 
 //serve reviews from cache
@@ -125,13 +172,15 @@ class DBHelper {
    */
   //refactor fetchRestaurants for fetch and async
   static async getRestaurants(callback) {
+    let restaurants;
     try {
       const db = await _dbPromise;
       const cachedRestaurants = await serveRestaurantsFromCache(callback);
 
-      //check if any reviews came in while offline,
+      //check if any reviews came in while offline, and update. This runs incase a user submits a review while offline and navigates back to the home page
 
       const offlineCachedReviews = await checkOfflineReviews();
+      const offlineCachedFavorites = await checkOfflineRestaurantFavorites();
 
       //if online and user navigated away from restaurant page while reviews were sent offline, delete them from the main page as well.
       if (navigator.onLine) {
@@ -146,30 +195,35 @@ class DBHelper {
           //if successful, delete the offline que
           await deleteOfflineReviews();
         }
+        if (offlineCachedFavorites.length) {
+          //found offline favorites, send them off to be created
+          //on the remote server
+          const updatedRestaurants = await Promise.all(
+            offlineCachedFavorites.map(favorite => {
+              return this.updateFavoriteRestaurant(null, favorite);
+            })
+          );
+          console.log(
+            'newly updated favorites after coming online',
+            updatedRestaurants
+          );
+          //if success delete offline que
+          await deleteOfflineRestaurantFavorites();
+        }
+        //finally get the restaurants from the network
+        const response = await fetch(`${DBHelper.DATABASE_URL}/restaurants`);
+        restaurants = await response.json();
       }
 
       if (cachedRestaurants && cachedRestaurants.length === 0) {
         // didn't receive restaurants from cache, send them via fetch,
         //then proceed to update cache from network
-        const response = await fetch(`${DBHelper.DATABASE_URL}/restaurants`);
-        const restaurants = await response.json();
+
         console.log('serving from network fetch');
         callback(null, restaurants);
 
         //update browser db
-
-        var putPromises = restaurants.map(r => {
-          let tx = db.transaction('restaurants', 'readwrite');
-          let restaurantStore = tx.objectStore('restaurants');
-
-          return restaurantStore.put(r);
-          //according to the idb library transaction will autoclose
-          //each time so I don't need to explicitly do so here
-          //i was getting errors saying the transaction had already closed
-          //when I tried to include it in my code.
-        });
-
-        Promise.all(putPromises)
+        this.updateRestaurantCache(restaurants, 'restaurants')
           .then(() => {
             console.log('putting restaurants succeeded');
             //callback(null, restaurants);
@@ -179,12 +233,58 @@ class DBHelper {
         //otherwise we got restaurants send them from cache
         console.log('serving from cache');
         callback(null, cachedRestaurants);
+        //now update cache
+        if (restaurants) {
+          //only gets called if we retrieved restaurants from network
+          this.updateRestaurantCache(restaurants, 'restaurants')
+            .then(() => {
+              //success
+              console.log('refreshed indexedDB with current restaurant info');
+            })
+            .catch(err =>
+              console.log(
+                'something went wrong updating indexed db with fetched restaurants',
+                err
+              )
+            );
+        }
       }
     } catch (err) {
       //something went down above, just return the err
       return callback(err, null);
     }
   }
+
+  /**
+   * @function
+   * @param {Array} restaurants array of restaurants to be updated
+   */
+
+  static async updateRestaurantCache(restaurants, cacheName) {
+    //todo refactor to update cache each request
+    //add restaurants to indexedDb
+
+    const db = await _dbPromise;
+    let tx = db.transaction(cacheName, 'readwrite');
+    let restaurantStore = tx.objectStore(cacheName);
+    await Promise.all(
+      restaurants.map(restaurant => {
+        //put all reviews in cache
+        console.log('putting restaurant in cache ', restaurant);
+        return restaurantStore.put(restaurant);
+      })
+    ).catch(err => {
+      console.log(
+        'inside DBHelper.updateRestaurantCache error putting restaurants in cachedrestaurantpromise: ',
+        err
+      );
+      tx.abort();
+      return Promise.reject(err);
+    });
+
+    return tx.complete;
+  }
+
   //grab all the restaurant reviews, update idb, return all reviews
   static async getRestaurantReviews(restaurantId) {
     try {
@@ -219,7 +319,7 @@ class DBHelper {
         //no reviews returned, return reviews received from network, update cache if there's a difference in
         //add returned reviews to cache from network
         this.updateReviewCache(reviews, 'reviews')
-          .then(() => console.log('putting reviews transaction completed'))
+          .then(() => console.log('putting reviews transaction complete'))
           .catch(err =>
             console.log(
               'something went wrong updating cachedReviews from network ',
@@ -273,11 +373,6 @@ class DBHelper {
     });
 
     return tx.complete;
-  }
-
-  static async addReviewsToServer(reviews) {
-    //add any reviews received offline to server
-    return reviews;
   }
 
   /**
@@ -434,7 +529,75 @@ class DBHelper {
     marker.addTo(map);
     return marker;
   }
+  /**
+   * Put request to update favorite restaurant
+   * @function
+   * @param {Object} e - The click event of update to be sent in put request
+   * @param {Object} [restaurants] - restaurant with update
+   * @returns {Promise}
+   */
+  static async updateFavoriteRestaurant(e, restaurant) {
+    let url, id, is_favorite;
+    if (e) {
+      e.preventDefault();
+      id = parseFloat(new URL(this.action).pathname.split('/')[2]);
+      url = this.action;
+      is_favorite = this.dataset.heart;
+    } else {
+      //receiving restaurant updates after coming back online, need to handle this a bit differently
+      id = parseFloat(restaurant.id);
+      is_favorite = restaurant.is_favorite;
+      url = `http://localhost:1337/restaurants/${id}/?is_favorite=${is_favorite}`;
+    }
+    try {
+      //online
+      //update idb with favorite restaurant
+      if (navigator.onLine) {
+        const res = await fetch(url, {
+          method: 'PUT',
+          body: JSON.stringify({
+            id,
+            is_favorite,
+          }),
+        });
+        var updatedRestaurant = await res.json();
+        //update the idb cache
+        await DBHelper.updateRestaurantCache(
+          [updatedRestaurant],
+          'restaurants'
+        ).catch(err =>
+          console.log(
+            'inside updateFavoriteRestaurant something went wrong updating favorite restaurant in cache ',
+            err
+          )
+        );
+      } else {
+        //offline, update the offline db
+        await DBHelper.updateRestaurantCache(
+          [{ id, is_favorite: this.dataset.heart }],
+          'offline-restaurant-favorite'
+        );
+        console.log('updated the offline restaurant favorite db');
+      }
 
+      //check one last time if an event was passed. We'll update the heart as long as everything before it went ok
+      if (e) {
+        const isHearted = this.heart.classList.toggle('heart__button--hearted');
+
+        if (isHearted) {
+          this.heart.classList.add('heart__button--float');
+          setTimeout(
+            () => this.heart.classList.remove('heart__button--float'),
+            2500
+          );
+        }
+      }
+
+      return updatedRestaurant;
+    } catch (err) {
+      console.log(err);
+    }
+  }
   /**
    * Post request to reviews
    */
